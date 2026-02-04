@@ -10,25 +10,27 @@ from telegram.ext import (
     filters
 )
 
-# --- CONFIGURATION FROM ENV ---
+# ─── ENV CONFIG ──────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 VERCEL_API_URL = os.getenv("VERCEL_API_URL")
 
 if not BOT_TOKEN or not VERCEL_API_URL:
-    raise RuntimeError("Missing BOT_TOKEN or VERCEL_API_URL env variable")
+    raise RuntimeError("Missing BOT_TOKEN or VERCEL_API_URL environment variable")
 
-# Enable logging
+# ─── LOGGING ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
+# ─── COMMANDS ────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hi! I'm your Insta Saver Bot.\n\n"
-        "Send me an Instagram Reel link, and I'll download it for you!"
+        "Send me an Instagram Reel link and I’ll download it for you 📥"
     )
 
+# ─── MAIN HANDLER ─────────────────────────────────────────────────────────────
 async def handle_instagram_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     chat_id = update.effective_chat.id
@@ -39,33 +41,67 @@ async def handle_instagram_link(update: Update, context: ContextTypes.DEFAULT_TY
 
     status_msg = await update.message.reply_text("🔄 Processing... Please wait.")
 
-    try:
-        payload = {"url": user_message}
-        response = requests.post(VERCEL_API_URL, json=payload, timeout=20)
+    payload = {"url": user_message}
+    max_retries = 3  # 1 initial + 2 retries
 
-        if response.status_code == 200:
-            data = response.json()
-            video_url = data.get("download_url")
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(
+                VERCEL_API_URL,
+                json=payload,
+                timeout=20
+            )
 
-            if video_url:
-                await update.message.reply_text("✅ Found it! Uploading...")
-                await update.message.reply_video(
-                    video=video_url,
-                    caption="Here is your video! 📥"
-                )
-                await context.bot.delete_message(
-                    chat_id=chat_id,
-                    message_id=status_msg.message_id
-                )
+            # ✅ SUCCESS
+            if response.status_code == 200:
+                data = response.json()
+                video_url = data.get("download_url")
+
+                if video_url:
+                    await update.message.reply_text("✅ Found it! Uploading...")
+                    await update.message.reply_video(
+                        video=video_url,
+                        caption="Here is your video! 📥"
+                    )
+                    await context.bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=status_msg.message_id
+                    )
+                    return
+                else:
+                    await status_msg.edit_text("❌ No download link found.")
+                    return
+
+            # ⏳ SERVER BUSY (503)
+            elif response.status_code == 503:
+                if attempt < max_retries:
+                    await status_msg.edit_text(
+                        f"⏳ Server is busy (attempt {attempt}/3)… retrying 🙏"
+                    )
+                    continue
+                else:
+                    await status_msg.edit_text(
+                        "😅 Server is under heavy load.\n"
+                        "Please be patient and try again in a moment 🙏"
+                    )
+                    return
+
+            # ❌ OTHER ERRORS
             else:
-                await status_msg.edit_text("❌ No download link found.")
-        else:
-            await status_msg.edit_text(f"❌ API Error: {response.status_code}")
+                await status_msg.edit_text(
+                    "❌ Something went wrong. Please try again later."
+                )
+                return
 
-    except Exception as e:
-        logging.exception(e)
-        await status_msg.edit_text("❌ Failed to download. Try again later.")
+        except Exception as e:
+            logging.exception(e)
+            if attempt == max_retries:
+                await status_msg.edit_text(
+                    "😅 Server is under heavy load.\n"
+                    "Please be patient and try again in a moment 🙏"
+                )
 
+# ─── APP START ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -75,4 +111,4 @@ if __name__ == "__main__":
     )
 
     print("🤖 Bot is running...")
-    application.run_polling()
+    application.run_polling(close_loop=False)
