@@ -81,7 +81,7 @@ async def handle_instagram_link(update: Update, context: ContextTypes.DEFAULT_TY
                     continue
                 else:
                     await status_msg.edit_text(
-                        "😅 Server is under heavy load.\n"
+                        "😅 Server of Instagram is busy.\n"
                         "Please be patient and please send video link again 😩 I will send your video 🙏"
                     )
                     return
