@@ -4,7 +4,7 @@ import requests
 import logging
 import psutil
 import shutil
-import html  # <--- Added this to handle special characters safely
+import html
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -33,9 +33,9 @@ def pretty_duration(d):
     try:
         parts = str(d).split(":")
         if len(parts) == 2:
-            return f"{int(parts[0]):02d} min {int(parts[1]):02d} sec"
+            return f"{int(parts[0]):02d}m {int(parts[1]):02d}s"
         if len(parts) == 3:
-            return f"{int(parts[0])} hr {int(parts[1]):02d} min {int(parts[2]):02d} sec"
+            return f"{int(parts[0])}h {int(parts[1]):02d}m {int(parts[2]):02d}s"
     except:
         pass
     return str(d)
@@ -43,12 +43,10 @@ def pretty_duration(d):
 # ───────── /start ─────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 <b>Instagram Reel Stream Bot</b>\n\n"
-        "Send an Instagram reel link and get:\n"
-        "• Thumbnail\n"
-        "• Duration\n"
-        "• Direct stream link\n\n"
-        "📊 /stats – bot status",
+        "👋 <b>Welcome!</b>\n\n"
+        "Send me an Instagram Reel link to get started.\n"
+        "I will provide a direct stream and download link.\n\n"
+        "📊 /stats – View bot capacity",
         parse_mode="HTML"
     )
 
@@ -60,14 +58,18 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mem = psutil.virtual_memory()
     disk = shutil.disk_usage("/")
 
-    await update.message.reply_text(
-        "📊 <b>Bot Stats</b>\n\n"
-        f"🏓 Ping: <code>{ping} ms</code>\n"
-        f"🧠 RAM: <code>{mem.used // (1024**2)} / {mem.total // (1024**2)} MB</code>\n"
-        f"💾 Disk: <code>{disk.used // (1024**2)} / {disk.total // (1024**2)} MB</code>\n"
-        "⚡ Mode: Stream only",
-        parse_mode="HTML"
+    # Hardcoded "Basic" plan details as requested
+    msg = (
+        "📊 <b>System Status</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ <b>Dyno Plan:</b> <code>Heroku Basic ($7/mo)</code>\n"
+        f"🟢 <b>Status:</b> <code>Online</code>\n"
+        f"🏓 <b>Ping:</b> <code>{ping} ms</code>\n\n"
+        f"🧠 <b>RAM Usage:</b> <code>{mem.used // (1024**2)}MB / 512MB</code>\n"
+        f"💾 <b>Disk Space:</b> <code>{disk.used // (1024**2)}MB Used</code>\n"
     )
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 # ───────── HANDLE LINK ─────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,11 +78,9 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "instagram.com" not in text:
         return
 
-    # Send a temporary message to show activity
-    status_msg = await update.message.reply_text("🔍 Fetching reel info…")
+    status_msg = await update.message.reply_text("🔎 <i>Searching for reel...</i>", parse_mode="HTML")
 
     try:
-        # Request with headers to mimic a browser (avoids some bot blocks)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -89,58 +89,54 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         j = r.json()
 
         if not j.get("success"):
-            raise Exception("API returned false success")
+            raise Exception("API Error")
 
         d = j.get("data", {})
 
-        # -- SAFE DATA HANDLING --
-        # We must escape special characters (<, >, &) for HTML parsing
-        title = html.escape(d.get("title", "Instagram Reel"))
-        uploader = html.escape(d.get("uploader", "Unknown"))
+        # Escape special characters for HTML safety
+        uploader = html.escape(d.get("uploader", "Instagram User"))
         stream_url = d.get("url")
         thumb = d.get("thumbnail")
         duration = pretty_duration(d.get("duration", "N/A"))
 
         if not stream_url:
-            raise Exception("No URL found in API response")
+            raise Exception("No URL found")
 
-        # HTML Caption
+        # Beautified Caption
         caption = (
-            f"🎥 <b>Instagram Reel</b>\n\n"
-            f"👤 <b>Uploader:</b> <code>{uploader}</code>\n"
-            f"⏱ <b>Duration:</b> <code>{duration}</code>\n\n"
-            f"🔗 <b>Stream link:</b>\n"
-            f"<a href='{stream_url}'>Click Here to Watch</a>\n\n"
-            f"<i>No download. Direct streaming only.</i>"
+            f"🎬 <b>IG Reel Found</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Author:</b> {uploader}\n"
+            f"⏱ <b>Duration:</b> {duration}\n\n"
+            f"<i>Select an option below:</i>"
         )
 
+        # Buttons: Play Stream AND Download
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("▶️ Play Stream", url=stream_url)]
+            [InlineKeyboardButton("▶️ Watch Stream", url=stream_url)],
+            [InlineKeyboardButton("⬇️ Download Video", url=stream_url)]
         ])
 
-        # Delete status message
         await status_msg.delete()
 
-        # Send the result
         await update.message.reply_photo(
             photo=thumb,
             caption=caption,
-            parse_mode="HTML", # Changed from Markdown to HTML
+            parse_mode="HTML",
             reply_markup=keyboard
         )
 
     except Exception as e:
         logger.error(f"Error: {e}")
-        # Edit the status message to show error
         try:
             await status_msg.edit_text(
-                "❌ <b>Failed to fetch reel.</b>\n"
-                "The API might be busy or the link is private.",
+                "❌ <b>Error</b>\n"
+                "Could not fetch the video. The link might be private or the server is busy.",
                 parse_mode="HTML"
             )
         except:
             pass
-            
+
 # ───────── MAIN ─────────
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
