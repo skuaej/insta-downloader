@@ -12,7 +12,7 @@ from telegram.ext import (
 
 # ─── ENV ─────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_URL = os.getenv("VERCEL_API_URL")  # koyeb api
+API_URL = os.getenv("VERCEL_API_URL")
 
 if not BOT_TOKEN or not API_URL:
     raise RuntimeError("❌ BOT_TOKEN or VERCEL_API_URL missing")
@@ -49,22 +49,20 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     video_url = None
 
-    async with httpx.AsyncClient(timeout=40.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+
+        # ─── API RETRY LOOP ──────────────────────────────────────────
         for attempt in range(1, 4):
             try:
                 logging.info(f"🌐 API attempt {attempt} → {API_URL}")
 
-                resp = await client.get(
-                    API_URL,
-                    params={"url": link}
-                )
-
+                resp = await client.get(API_URL, params={"url": link})
                 logging.info(f"📡 API status: {resp.status_code}")
 
                 if resp.status_code == 200:
                     data = resp.json()
 
-                    if data.get("success") is True:
+                    if data.get("success"):
                         video_url = data["data"]["url"]
                         break
                     else:
@@ -73,8 +71,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 elif resp.status_code in (502, 503, 504):
                     await status.edit_text(
-                        f"⏳ Server busy (attempt {attempt}/3)\n"
-                        "Please be patient 😀"
+                        f"⏳ Server busy ({attempt}/3)\nPlease be patient 😀"
                     )
                 else:
                     await status.edit_text(f"❌ Server error: {resp.status_code}")
@@ -83,37 +80,34 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.error(f"❌ API error: {e}")
                 if attempt == 3:
-                    await status.edit_text(
-                        "❌ Server error. Please try later."
-                    )
+                    await status.edit_text("❌ Server error. Please try later.")
                     return
 
-    if not video_url:
-        await status.edit_text("❌ Failed after 3 tries")
-        return
-
-    # ─── DOWNLOAD & SEND ─────────────────────────────────────────────
-    try:
-        await status.edit_text("⬇️ Downloading video...")
-
-        video_resp = await client.get(video_url)
-
-        if video_resp.status_code != 200:
-            await status.edit_text("❌ Failed to download video")
+        if not video_url:
+            await status.edit_text("❌ Failed after 3 attempts")
             return
 
-        await status.edit_text("📤 Uploading...")
+        # ─── DOWNLOAD VIDEO ─────────────────────────────────────────
+        try:
+            await status.edit_text("⬇️ Downloading video...")
 
-        await update.message.reply_video(
-            video=video_resp.content,
-            caption="✅ Download complete"
-        )
+            video_resp = await client.get(video_url)
+            if video_resp.status_code != 200:
+                await status.edit_text("❌ Failed to download video")
+                return
 
-        await context.bot.delete_message(chat_id, status.message_id)
+            await status.edit_text("📤 Uploading...")
 
-    except Exception as e:
-        logging.error(f"❌ Upload error: {e}")
-        await status.edit_text("❌ Upload failed (file too large?)")
+            await update.message.reply_video(
+                video=video_resp.content,
+                caption="✅ Download complete"
+            )
+
+            await context.bot.delete_message(chat_id, status.message_id)
+
+        except Exception as e:
+            logging.error(f"❌ Upload error: {e}")
+            await status.edit_text("❌ Upload failed (file too large?)")
 
 # ─── MAIN ────────────────────────────────────────────────────────────
 def main():
