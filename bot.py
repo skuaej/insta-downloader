@@ -1,6 +1,6 @@
 import os
 import logging
-import requests
+import httpx  # replacement for requests
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -39,67 +39,61 @@ async def handle_instagram_link(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("⚠️ That doesn't look like an Instagram link.")
         return
 
+    # Keep a reference to the status message to edit it later
     status_msg = await update.message.reply_text("🔄 Processing... Please wait.")
 
     payload = {"url": user_message}
-    max_retries = 3  # 1 initial + 2 retries
+    max_retries = 3
+    
+    # Use AsyncClient for non-blocking requests
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await client.post(VERCEL_API_URL, json=payload)
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.post(
-                VERCEL_API_URL,
-                json=payload,
-                timeout=20
-            )
+                # ✅ SUCCESS
+                if response.status_code == 200:
+                    data = response.json()
+                    video_url = data.get("download_url")
 
-            # ✅ SUCCESS
-            if response.status_code == 200:
-                data = response.json()
-                video_url = data.get("download_url")
+                    if video_url:
+                        # Delete the "Processing" message to clean up chat
+                        await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                        
+                        # Upload video
+                        await update.message.reply_text("✅ Found it! Uploading...")
+                        await update.message.reply_video(
+                            video=video_url,
+                            caption="Here is your video! 📥"
+                        )
+                        return
+                    else:
+                        await status_msg.edit_text("❌ No download link found in the API response.")
+                        return
 
-                if video_url:
-                    await update.message.reply_text("✅ Found it! Uploading...")
-                    await update.message.reply_video(
-                        video=video_url,
-                        caption="Here is your video! 📥"
-                    )
-                    await context.bot.delete_message(
-                        chat_id=chat_id,
-                        message_id=status_msg.message_id
-                    )
-                    return
+                # ⏳ SERVER BUSY (503)
+                elif response.status_code == 503:
+                    if attempt < max_retries:
+                        await status_msg.edit_text(f"⏳ Server is busy (attempt {attempt}/{max_retries})… retrying 🙏")
+                        continue # Loop again
+                    else:
+                        await status_msg.edit_text("😅 Instagram server is busy right now. Please try again later.")
+                        return
+
+                # ❌ OTHER ERRORS
                 else:
-                    await status_msg.edit_text("❌ No download link found.")
+                    await status_msg.edit_text(f"❌ Error {response.status_code}. Please try again later.")
                     return
 
-            # ⏳ SERVER BUSY (503)
-            elif response.status_code == 503:
-                if attempt < max_retries:
-                    await status_msg.edit_text(
-                        f"⏳ Server is busy (attempt {attempt}/3)… retrying 🙏"
-                    )
-                    continue
-                else:
-                    await status_msg.edit_text(
-                        "😅 Server of Instagram is busy.\n"
-                        "Please be patient and please send video link again 😩 I will send your video 🙏"
-                    )
-                    return
-
-            # ❌ OTHER ERRORS
-            else:
-                await status_msg.edit_text(
-                    "❌ Something went wrong. Please try again later."
-                )
-                return
-
-        except Exception as e:
-            logging.exception(e)
-            if attempt == max_retries:
-                await status_msg.edit_text(
-                    "😅 Server is under heavy load.\n"
-                    "Please be patient and try again in a moment 🙏"
-                )
+            except httpx.RequestError as e:
+                # This catches network/timeout errors specifically
+                logging.error(f"Network error on attempt {attempt}: {e}")
+                if attempt == max_retries:
+                    await status_msg.edit_text("😅 Server is under heavy load (Timeout). Please try again.")
+            except Exception as e:
+                logging.exception(e)
+                if attempt == max_retries:
+                    await status_msg.edit_text("❌ An unexpected error occurred.")
 
 # ─── APP START ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
