@@ -1,9 +1,15 @@
+import os
 import time
 import requests
 import psutil
 import shutil
 import logging
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -12,8 +18,14 @@ from telegram.ext import (
     filters
 )
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+# ─────────────────────────────
+# CONFIG
+# ─────────────────────────────
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # 🔐 from env
 API_URL = "https://underground-hildy-uhhy5-65dab051.koyeb.app/api/nuelink"
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN env variable not set")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,31 +33,28 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────
 # Helpers
 # ─────────────────────────────
-def format_duration(duration_str: str) -> str:
-    """
-    Converts '1:27' → '01 min 27 sec'
-    """
+def format_duration(d: str) -> str:
     try:
-        parts = duration_str.split(":")
-        if len(parts) == 2:
-            return f"{int(parts[0]):02d} min {int(parts[1]):02d} sec"
-        if len(parts) == 3:
-            return f"{int(parts[0])} hr {int(parts[1]):02d} min {int(parts[2]):02d} sec"
+        p = d.split(":")
+        if len(p) == 2:
+            return f"{int(p[0]):02d} min {int(p[1]):02d} sec"
+        if len(p) == 3:
+            return f"{int(p[0])} hr {int(p[1]):02d} min {int(p[2]):02d} sec"
     except:
         pass
-    return duration_str
+    return d
 
 # ─────────────────────────────
 # /start
 # ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 **Instagram Reel Stream Bot**\n\n"
-        "Send any Instagram reel link\n"
-        "You’ll get:\n"
+        "🎬 *Instagram Reel Stream Bot*\n\n"
+        "Send any Instagram reel link\n\n"
+        "You will get:\n"
         "• Thumbnail\n"
-        "• Video length\n"
-        "• Direct stream link\n\n"
+        "• Duration\n"
+        "• Stream link only\n\n"
         "📊 /stats – bot status",
         parse_mode="Markdown"
     )
@@ -54,24 +63,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /stats
 # ─────────────────────────────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_t = time.time()
-    msg = await update.message.reply_text("Checking bot stats…")
+    t = time.time()
+    msg = await update.message.reply_text("Checking stats…")
 
-    ping = int((time.time() - start_t) * 1000)
+    ping = int((time.time() - t) * 1000)
     mem = psutil.virtual_memory()
     disk = shutil.disk_usage("/")
 
     await msg.edit_text(
-        "📊 **Bot Stats**\n\n"
+        "📊 *Bot Stats*\n\n"
         f"🏓 Ping: `{ping} ms`\n"
-        f"🧠 RAM: `{mem.used // (1024**2)} MB / {mem.total // (1024**2)} MB`\n"
-        f"💾 Disk: `{disk.used // (1024**2)} MB / {disk.total // (1024**2)} MB`\n"
-        "⚡ Mode: Stream only (no download)",
+        f"🧠 RAM: `{mem.used//1024//1024} / {mem.total//1024//1024} MB`\n"
+        f"💾 Disk: `{disk.used//1024//1024} / {disk.total//1024//1024} MB`\n"
+        "⚡ Mode: Stream only",
         parse_mode="Markdown"
     )
 
 # ─────────────────────────────
-# Handle Instagram link
+# Handle Reel Link
 # ─────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -79,30 +88,40 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "instagram.com" not in text:
         return
 
-    status = await update.message.reply_text("🔍 Fetching reel details…")
+    status = await update.message.reply_text("🔍 Fetching reel…")
 
     try:
-        r = requests.get(API_URL, params={"url": text}, timeout=15)
-        data = r.json()
+        data = None
 
-        if not data.get("success"):
-            raise Exception("API failed")
+        # 🔁 Retry logic (3 tries)
+        for _ in range(3):
+            r = requests.get(API_URL, params={"url": text}, timeout=15)
+            data = r.json()
+            if data.get("success"):
+                break
+            time.sleep(2)
+
+        if not data or not data.get("success"):
+            raise Exception("API overloaded")
 
         info = data["data"]
 
-        title = info.get("title", "Instagram Reel")
         thumb = info.get("thumbnail")
         stream_url = info.get("url")
-        uploader = info.get("uploader", "Unknown")
         duration = format_duration(info.get("duration", "N/A"))
+        uploader = info.get("uploader", "Unknown")
+
+        # 🚫 Block download links
+        if stream_url.endswith(".mp4"):
+            raise Exception("Download link blocked")
 
         caption = (
-            "🎥 **Instagram Reel**\n\n"
-            f"👤 **Uploader:** `{uploader}`\n"
-            f"⏱ **Duration:** `{duration}`\n\n"
-            "🔗 **Stream Link:**\n"
+            "🎥 *Instagram Reel*\n\n"
+            f"👤 *Uploader:* `{uploader}`\n"
+            f"⏱ *Duration:* `{duration}`\n\n"
+            "🔗 *Stream Link:*\n"
             f"{stream_url}\n\n"
-            "_⚠ No download. Direct streaming only._"
+            "_No download • Stream only_"
         )
 
         keyboard = InlineKeyboardMarkup([
@@ -120,7 +139,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(e)
         await status.edit_text(
-            "😅 Server is under heavy load.\n"
+            "😅 Server under heavy load.\n"
             "Please be patient and try again 🙏"
         )
 
