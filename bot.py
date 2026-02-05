@@ -1,4 +1,3 @@
-import os
 import time
 import requests
 import psutil
@@ -21,28 +20,25 @@ from telegram.ext import (
 # ─────────────────────────────
 # CONFIG
 # ─────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # 🔐 from env
+BOT_TOKEN = "PASTE_YOUR_REAL_BOT_TOKEN_HERE"
 API_URL = "https://underground-hildy-uhhy5-65dab051.koyeb.app/api/nuelink"
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN env variable not set")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────
-# Helpers
+# HELPERS
 # ─────────────────────────────
-def format_duration(d: str) -> str:
+def format_duration(duration: str) -> str:
     try:
-        p = d.split(":")
-        if len(p) == 2:
-            return f"{int(p[0]):02d} min {int(p[1]):02d} sec"
-        if len(p) == 3:
-            return f"{int(p[0])} hr {int(p[1]):02d} min {int(p[2]):02d} sec"
+        parts = duration.split(":")
+        if len(parts) == 2:
+            return f"{int(parts[0]):02d} min {int(parts[1]):02d} sec"
+        if len(parts) == 3:
+            return f"{int(parts[0])} hr {int(parts[1]):02d} min {int(parts[2]):02d} sec"
     except:
         pass
-    return d
+    return duration or "N/A"
 
 # ─────────────────────────────
 # /start
@@ -50,12 +46,12 @@ def format_duration(d: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 *Instagram Reel Stream Bot*\n\n"
-        "Send any Instagram reel link\n\n"
-        "You will get:\n"
+        "Send any Instagram Reel link\n\n"
+        "You’ll get:\n"
         "• Thumbnail\n"
         "• Duration\n"
-        "• Stream link only\n\n"
-        "📊 /stats – bot status",
+        "• Direct Stream Link\n\n"
+        "📊 Use /stats to check bot status",
         parse_mode="Markdown"
     )
 
@@ -63,24 +59,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /stats
 # ─────────────────────────────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    t = time.time()
-    msg = await update.message.reply_text("Checking stats…")
+    start_time = time.time()
+    msg = await update.message.reply_text("📊 Checking stats…")
 
-    ping = int((time.time() - t) * 1000)
+    ping = int((time.time() - start_time) * 1000)
     mem = psutil.virtual_memory()
     disk = shutil.disk_usage("/")
 
     await msg.edit_text(
         "📊 *Bot Stats*\n\n"
         f"🏓 Ping: `{ping} ms`\n"
-        f"🧠 RAM: `{mem.used//1024//1024} / {mem.total//1024//1024} MB`\n"
-        f"💾 Disk: `{disk.used//1024//1024} / {disk.total//1024//1024} MB`\n"
-        "⚡ Mode: Stream only",
+        f"🧠 RAM: `{mem.used // (1024**2)} MB / {mem.total // (1024**2)} MB`\n"
+        f"💾 Disk: `{disk.used // (1024**2)} MB / {disk.total // (1024**2)} MB`\n\n"
+        "⚡ Mode: Stream only (no downloads)",
         parse_mode="Markdown"
     )
 
 # ─────────────────────────────
-# Handle Reel Link
+# HANDLE INSTAGRAM LINK
 # ─────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -88,32 +84,32 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "instagram.com" not in text:
         return
 
-    status = await update.message.reply_text("🔍 Fetching reel…")
+    status = await update.message.reply_text("🔍 Fetching reel details…")
 
     try:
         data = None
 
-        # 🔁 Retry logic (3 tries)
+        # retry logic
         for _ in range(3):
-            r = requests.get(API_URL, params={"url": text}, timeout=15)
+            r = requests.get(API_URL, params={"url": text}, timeout=20)
             data = r.json()
             if data.get("success"):
                 break
             time.sleep(2)
 
         if not data or not data.get("success"):
-            raise Exception("API overloaded")
+            await status.edit_text("❌ API busy. Try again later 🙏")
+            return
 
         info = data["data"]
 
-        thumb = info.get("thumbnail")
+        thumbnail = info.get("thumbnail")
         stream_url = info.get("url")
-        duration = format_duration(info.get("duration", "N/A"))
         uploader = info.get("uploader", "Unknown")
+        duration = format_duration(info.get("duration", "N/A"))
 
-        # 🚫 Block download links
-        if stream_url.endswith(".mp4"):
-            raise Exception("Download link blocked")
+        if not stream_url:
+            raise Exception("Stream URL missing")
 
         caption = (
             "🎥 *Instagram Reel*\n\n"
@@ -121,30 +117,35 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏱ *Duration:* `{duration}`\n\n"
             "🔗 *Stream Link:*\n"
             f"{stream_url}\n\n"
-            "_No download • Stream only_"
+            "_⚠ Stream only • No download_"
         )
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("▶️ Play Stream", url=stream_url)]
         ])
 
-        await status.delete()
         await update.message.reply_photo(
-            photo=thumb,
+            photo=thumbnail,
             caption=caption,
             parse_mode="Markdown",
             reply_markup=keyboard
         )
 
+        # safely delete status message
+        try:
+            await status.delete()
+        except:
+            pass
+
     except Exception as e:
         logger.error(e)
-        await status.edit_text(
-            "😅 Server under heavy load.\n"
-            "Please be patient and try again 🙏"
-        )
+        try:
+            await status.edit_text("❌ Failed to fetch reel. Try again later.")
+        except:
+            pass
 
 # ─────────────────────────────
-# Main
+# MAIN
 # ─────────────────────────────
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -153,6 +154,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
+    logger.info("Bot started successfully")
     app.run_polling()
 
 if __name__ == "__main__":
