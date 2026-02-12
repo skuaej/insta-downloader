@@ -1,10 +1,9 @@
 import logging
 import requests
-import json
 import os
 import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
 # Heroku Environment Variable se Token uthayega
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -17,6 +16,27 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
+
+# --- START COMMAND HANDLER ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_name = update.effective_user.first_name
+    welcome_text = (
+        f"Hey **{user_name}**! Welcome to the **Universal Downloader Bot** 🚀\n\n"
+        "I can download media from almost everywhere! Just send me a link from:\n"
+        "📺 **YouTube**\n"
+        "📸 **Instagram**\n"
+        "🎵 **TikTok**\n"
+        "🎧 **Spotify**\n"
+        "👥 **Facebook**\n\n"
+        "✨ _Just paste the link below and I'll do the rest!_"
+    )
+    
+    # Optional: Ek button bhi daal dete hain for style
+    keyboard = [[InlineKeyboardButton("Developer 🛠️", url="https://t.me/your_username")]] # Replace with your TG link
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+    logger.info(f"User {user_name} started the bot.")
 
 def get_media_data(data):
     results = data.get("all_results") or data.get("results", {})
@@ -72,20 +92,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await status_msg.edit_text(
                     f"📦 **File Found on {media['platform']}**\n\n🎬 **Title:** {title}\n\n"
-                    "⚠️ _High quality file detected. Use the button to download._",
+                    "⚠️ _The file is too large for direct Telegram upload. Use the button below._",
                     reply_markup=reply_markup, parse_mode="Markdown"
                 )
         else:
-            await status_msg.edit_text("❌ **No working link found.**")
+            await status_msg.edit_text("❌ **Sorry, I couldn't find any working link.**")
     except Exception as e:
         logger.error(f"Error: {e}")
         await status_msg.edit_text("⚠️ **API Error.**")
 
 if __name__ == '__main__':
     if not TOKEN:
-        print("ERROR: BOT_TOKEN variable not found in environment!")
+        logger.error("BOT_TOKEN not found in environment!")
         sys.exit(1)
         
     app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Handlers
+    app.add_handler(CommandHandler("start", start)) # Start button logic
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    logger.info("Universal Bot with Start Button is Running...")
     app.run_polling()
