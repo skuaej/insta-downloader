@@ -1,152 +1,91 @@
-import os
-import time
-import requests
 import logging
-import psutil
-import shutil
-import html
+import requests
+import json
+import os
+import sys
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+# Heroku Environment Variable se Token uthayega
+TOKEN = os.environ.get("BOT_TOKEN")
+API_URL = "https://instaaaa-pi.vercel.app/download"
 
-# ───────── CONFIG ─────────
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_URL = "https://underground-hildy-uhhy5-65dab051.koyeb.app/api/nuelink"
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment variables")
-
+# Standard Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-# ───────── HELPERS ─────────
-def pretty_duration(d):
-    try:
-        parts = str(d).split(":")
-        if len(parts) == 2:
-            return f"{int(parts[0]):02d}m {int(parts[1]):02d}s"
-        if len(parts) == 3:
-            return f"{int(parts[0])}h {int(parts[1]):02d}m {int(parts[2]):02d}s"
-    except:
-        pass
-    return str(d)
+def get_media_data(data):
+    results = data.get("all_results") or data.get("results", {})
+    metadata = {
+        "link": data.get("clean_download_url"),
+        "title": "Universal Media",
+        "desc": "Downloaded via Universal Bot",
+        "platform": data.get("platform", "Media").capitalize(),
+        "type": "video"
+    }
 
-# ───────── /start ─────────
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 <b>Welcome!</b>\n\n"
-        "Send me an Instagram Reel link to get started.\n"
-        "I will provide a direct stream and download link.\n\n"
-        "📊 /stats – View bot capacity",
-        parse_mode="HTML"
-    )
+    for provider, content in results.items():
+        if isinstance(content, dict) and content.get("status") != "failed":
+            if content.get("title"): metadata["title"] = content["title"]
+            if content.get("author"): metadata["desc"] = f"By: {content['author']}"
+            
+            keys = ["no_watermark", "no_watermark_hd", "video_url", "download_url", "url", "mp3"]
+            for key in keys:
+                link = content.get(key)
+                if link and isinstance(link, str) and link.startswith("http"):
+                    if "token=" in link and len(link) < 60: continue
+                    if any(x in link.lower() for x in [".jpg", ".png", ".webp"]): continue
+                    metadata["link"] = link
+                    if key == "mp3" or "spotify" in data.get("platform", "").lower():
+                        metadata["type"] = "audio"
+                    return metadata
+    return metadata if metadata["link"] else None
 
-# ───────── /stats ─────────
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_time = time.time()
-    ping = int((time.time() - start_time) * 1000)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text
+    if not url.startswith("http"): return
 
-    mem = psutil.virtual_memory()
-    disk = shutil.disk_usage("/")
-
-    # Hardcoded "Basic" plan details as requested
-    msg = (
-        "📊 <b>System Status</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚙️ <b>Dyno Plan:</b> <code>Heroku Basic ($7/mo)</code>\n"
-        f"🟢 <b>Status:</b> <code>Online</code>\n"
-        f"🏓 <b>Ping:</b> <code>{ping} ms</code>\n\n"
-        f"🧠 <b>RAM Usage:</b> <code>{mem.used // (1024**2)}MB / 512MB</code>\n"
-        f"💾 <b>Disk Space:</b> <code>{disk.used // (1024**2)}MB Used</code>\n"
-    )
-
-    await update.message.reply_text(msg, parse_mode="HTML")
-
-# ───────── HANDLE LINK ─────────
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-
-    if "instagram.com" not in text:
-        return
-
-    status_msg = await update.message.reply_text("🔎 <i>Searching for reel...</i>", parse_mode="HTML")
+    logger.info(f"Processing URL: {url}")
+    status_msg = await update.message.reply_text("🔎 **Searching for your media...**", parse_mode="Markdown")
 
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        
-        r = requests.get(API_URL, params={"url": text}, headers=headers, timeout=20)
-        j = r.json()
+        response = requests.get(f"{API_URL}?url={url}", timeout=25)
+        data = response.json()
+        media = get_media_data(data)
 
-        if not j.get("success"):
-            raise Exception("API Error")
-
-        d = j.get("data", {})
-
-        # Escape special characters for HTML safety
-        uploader = html.escape(d.get("uploader", "Instagram User"))
-        stream_url = d.get("url")
-        thumb = d.get("thumbnail")
-        duration = pretty_duration(d.get("duration", "N/A"))
-
-        if not stream_url:
-            raise Exception("No URL found")
-
-        # Beautified Caption
-        caption = (
-            f"🎬 <b>IG Reel Found</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 <b>Author:</b> {uploader}\n"
-            f"⏱ <b>Duration:</b> {duration}\n\n"
-            f"<i>Select an option below:</i>"
-        )
-
-        # Buttons: Play Stream AND Download
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("▶️ Watch Stream", url=stream_url)],
-            [InlineKeyboardButton("⬇️ Download Video", url=stream_url)]
-        ])
-
-        await status_msg.delete()
-
-        await update.message.reply_photo(
-            photo=thumb,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-
+        if media and media["link"]:
+            title = media['title'][:100]
+            caption = f"🎬 **{title}**\n👤 {media['desc']}\n\n✨ _Powered by Universal Bot_"
+            
+            try:
+                if media["type"] == "audio":
+                    await update.message.reply_audio(audio=media["link"], caption=caption, parse_mode="Markdown")
+                else:
+                    await update.message.reply_video(video=media["link"], caption=caption, parse_mode="Markdown", supports_streaming=True)
+                await status_msg.delete()
+            except Exception:
+                keyboard = [[InlineKeyboardButton("📥 Download File", url=media['link'])]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await status_msg.edit_text(
+                    f"📦 **File Found on {media['platform']}**\n\n🎬 **Title:** {title}\n\n"
+                    "⚠️ _High quality file detected. Use the button to download._",
+                    reply_markup=reply_markup, parse_mode="Markdown"
+                )
+        else:
+            await status_msg.edit_text("❌ **No working link found.**")
     except Exception as e:
         logger.error(f"Error: {e}")
-        try:
-            await status_msg.edit_text(
-                "❌ <b>Error</b>\n"
-                "Could not fetch the video. The link might be private or the server is busy.",
-                parse_mode="HTML"
-            )
-        except:
-            pass
+        await status_msg.edit_text("⚠️ **API Error.**")
 
-# ───────── MAIN ─────────
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-
-    logger.info("🤖 Bot started successfully")
+if __name__ == '__main__':
+    if not TOKEN:
+        print("ERROR: BOT_TOKEN variable not found in environment!")
+        sys.exit(1)
+        
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.run_polling()
-
-if __name__ == "__main__":
-    main()
